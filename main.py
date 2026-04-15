@@ -9,8 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db, init_db
+from app.models.calculation import Calculation
 from app.models.user import User
+from app.operations.factory import CalculationFactory
 from app.operations import add, subtract, multiply, divide  # Ensure correct import path
+from app.schemas.calculation import CalculationCreate, CalculationRead
 from app.schemas.user import UserCreate, UserLogin, UserLoginResponse, UserRead
 from app.security import hash_password, verify_password
 import uvicorn
@@ -164,6 +167,86 @@ def login_user(payload: UserLogin, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
     return UserLoginResponse(message="Login successful.", user=UserRead.model_validate(user))
+
+
+@app.get("/calculations", response_model=list[CalculationRead])
+def browse_calculations(db: Session = Depends(get_db)):
+    """Browse all persisted calculations."""
+    return db.query(Calculation).order_by(Calculation.id.asc()).all()
+
+
+@app.get("/calculations/{calculation_id}", response_model=CalculationRead)
+def read_calculation(calculation_id: int, db: Session = Depends(get_db)):
+    """Read a single calculation by id."""
+    calculation = db.get(Calculation, calculation_id)
+    if calculation is None:
+        raise HTTPException(status_code=404, detail="Calculation not found.")
+    return calculation
+
+
+@app.post("/calculations", response_model=CalculationRead, status_code=status.HTTP_201_CREATED)
+def add_calculation(payload: CalculationCreate, db: Session = Depends(get_db)):
+    """Add a new calculation record."""
+    result = payload.result
+    if result is None:
+        result = CalculationFactory.calculate(payload.type.value, payload.a, payload.b)
+
+    calculation = Calculation(
+        a=payload.a,
+        b=payload.b,
+        type=payload.type.value,
+        result=result,
+        user_id=payload.user_id,
+    )
+    db.add(calculation)
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Unable to create calculation.") from exc
+
+    db.refresh(calculation)
+    return calculation
+
+
+@app.put("/calculations/{calculation_id}", response_model=CalculationRead)
+def edit_calculation(calculation_id: int, payload: CalculationCreate, db: Session = Depends(get_db)):
+    """Edit an existing calculation record using replacement payload data."""
+    calculation = db.get(Calculation, calculation_id)
+    if calculation is None:
+        raise HTTPException(status_code=404, detail="Calculation not found.")
+
+    result = payload.result
+    if result is None:
+        result = CalculationFactory.calculate(payload.type.value, payload.a, payload.b)
+
+    calculation.a = payload.a
+    calculation.b = payload.b
+    calculation.type = payload.type.value
+    calculation.result = result
+    calculation.user_id = payload.user_id
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Unable to update calculation.") from exc
+
+    db.refresh(calculation)
+    return calculation
+
+
+@app.delete("/calculations/{calculation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_calculation(calculation_id: int, db: Session = Depends(get_db)):
+    """Delete a calculation by id."""
+    calculation = db.get(Calculation, calculation_id)
+    if calculation is None:
+        raise HTTPException(status_code=404, detail="Calculation not found.")
+
+    db.delete(calculation)
+    db.commit()
+    return None
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
