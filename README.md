@@ -57,7 +57,7 @@ export DATABASE_URL="postgresql+psycopg2://user:password@localhost:5432/myappdb"
 ### 5) Run the app
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn main:app --reload
 ```
 
 Open:
@@ -89,6 +89,38 @@ export DATABASE_URL="postgresql+psycopg2://user:password@localhost:5432/myappdb"
 pytest -q tests/integration
 ```
 
+### API integration tests (Postgres-backed endpoint tests)
+
+These tests hit the FastAPI endpoints through TestClient while using a real Postgres session.
+
+```bash
+export DATABASE_URL="postgresql+psycopg2://user:password@localhost:5432/myappdb"
+pytest -q tests/integration/test_api_endpoints_postgres_integration.py
+```
+
+What this verifies:
+
+- User register and login endpoint flow
+- Password is hashed and stored in DB (not plain text)
+- Calculation BREAD flow:
+  - Add (POST /calculations)
+  - Browse (GET /calculations)
+  - Read (GET /calculations/{id})
+  - Edit (PUT /calculations/{id})
+  - Delete (DELETE /calculations/{id})
+- Invalid payloads return expected error status codes and error JSON fields
+
+### Run integration tests in CI-style mode locally
+
+If you want local behavior similar to GitHub Actions:
+
+```bash
+docker run --name local-pg -e POSTGRES_USER=user -e POSTGRES_PASSWORD=password -e POSTGRES_DB=myappdb -p 5432:5432 -d postgres:latest
+export DATABASE_URL="postgresql://user:password@localhost:5432/myappdb"
+pytest -q tests/integration
+docker rm -f local-pg
+```
+
 ### New calculation integration tests (requires Postgres)
 
 ```bash
@@ -101,6 +133,83 @@ pytest -q tests/integration/test_calculation_integration.py
 ```bash
 pytest -q
 ```
+
+---
+
+## Manual Checks via OpenAPI
+
+### 1) Start the API
+
+```bash
+uvicorn main:app --reload
+```
+
+### 2) Open API docs
+
+- Swagger UI: http://127.0.0.1:8000/docs
+- ReDoc: http://127.0.0.1:8000/redoc
+
+### 3) Manually test User endpoints in Swagger UI
+
+1. Expand POST /users/register and click Try it out.
+2. Use payload example:
+
+  {
+    "username": "manual_user",
+    "email": "manual_user@example.com",
+    "password": "StrongPass123"
+  }
+
+3. Confirm response code is 201 and response includes id, username, email, created_at.
+4. Expand POST /users/login and click Try it out.
+5. Use payload example:
+
+  {
+    "username": "manual_user",
+    "password": "StrongPass123"
+  }
+
+6. Confirm response code is 200 and response contains message plus user object.
+
+### 4) Manually test Calculation BREAD endpoints in Swagger UI
+
+1. POST /calculations
+
+  {
+    "a": 10,
+    "b": 5,
+    "type": "Add"
+  }
+
+  Confirm 201 and copy returned id.
+
+2. GET /calculations
+  Confirm the new record appears.
+
+3. GET /calculations/{id}
+  Use the copied id and confirm 200.
+
+4. PUT /calculations/{id}
+
+  {
+    "a": 9,
+    "b": 3,
+    "type": "Multiply"
+  }
+
+  Confirm 200 and updated result.
+
+5. DELETE /calculations/{id}
+  Confirm 204.
+
+6. GET /calculations/{id} again
+  Confirm 404 with Calculation not found error.
+
+### 5) Manual negative tests
+
+- POST /calculations with invalid type (for example type: "Power") should return 400.
+- POST /calculations with Divide and b=0 should return 400.
+- POST /users/login with wrong password should return 401.
 
 ---
 
