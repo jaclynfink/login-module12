@@ -20,3 +20,17 @@ class UserRead(BaseModel):
     username: str
     email: EmailStr
     created_at: datetime
+
+
+class UserLogin(BaseModel):
+    """Schema for incoming login payloads."""
+
+    username: str = Field(min_length=4, max_length=40)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserLoginResponse(BaseModel):
+    """Schema for successful login responses."""
+
+    message: str
+    user: UserRead

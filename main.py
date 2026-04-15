@@ -1,11 +1,18 @@
 # main.py
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator  # Use @validator for Pydantic 1.x
 from fastapi.exceptions import RequestValidationError
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.database import get_db, init_db
+from app.models.user import User
 from app.operations import add, subtract, multiply, divide  # Ensure correct import path
+from app.schemas.user import UserCreate, UserLogin, UserLoginResponse, UserRead
+from app.security import hash_password, verify_password
 import uvicorn
 import logging
 
@@ -14,6 +21,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    """Create database tables when the app starts."""
+    init_db()
 
 # Setup templates directory
 templates = Jinja2Templates(directory="templates")
@@ -113,6 +126,44 @@ async def divide_route(operation: OperationRequest):
     except Exception as e:
         logger.error(f"Divide Operation Internal Error: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+@app.post("/users/register", response_model=UserRead, status_code=status.HTTP_201_CREATED)
+def register_user(payload: UserCreate, db: Session = Depends(get_db)):
+    """Register a new user using hashed password storage."""
+    duplicate_username = db.query(User).filter(User.username == payload.username).first()
+    if duplicate_username:
+        raise HTTPException(status_code=409, detail="Username already exists.")
+
+    duplicate_email = db.query(User).filter(User.email == payload.email).first()
+    if duplicate_email:
+        raise HTTPException(status_code=409, detail="Email already exists.")
+
+    user = User(
+        username=payload.username,
+        email=payload.email,
+        password_hash=hash_password(payload.password),
+    )
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.error("Registration integrity error: %s", exc)
+        raise HTTPException(status_code=409, detail="User already exists.") from exc
+
+    db.refresh(user)
+    return user
+
+
+@app.post("/users/login", response_model=UserLoginResponse)
+def login_user(payload: UserLogin, db: Session = Depends(get_db)):
+    """Authenticate a user by validating the password against the stored hash."""
+    user = db.query(User).filter(User.username == payload.username).first()
+    if user is None or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+
+    return UserLoginResponse(message="Login successful.", user=UserRead.model_validate(user))
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
